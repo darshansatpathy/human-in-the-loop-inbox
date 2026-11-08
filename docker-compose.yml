@@ -1,0 +1,27 @@
+# Local stack: PostgreSQL, a migration, the inbox, and Mailpit to read approval emails at http://localhost:8025.
+#   docker compose up -d
+#   docker compose run --rm hitl add-agent refund-bot
+#   docker compose run --rm hitl add-reviewer ana@example.com --name Ana --groups finance,support-leads --email ana@example.com
+services:
+  db:
+    image: postgres:17
+    environment: {POSTGRES_PASSWORD: hitl, POSTGRES_DB: hitl}
+    healthcheck: {test: ["CMD", "pg_isready", "-U", "postgres"], interval: 2s, retries: 30}
+  mail:
+    image: axllent/mailpit:v1.21
+    ports: ["8025:8025"]
+  migrate:
+    build: .
+    command: ["migrate"]
+    environment: &env
+      HITL_DATABASE_URL: postgresql://postgres:hitl@db:5432/hitl
+      HITL_SIGNING_KEY: change-me-local-only-0123456789abcdef
+      HITL_PUBLIC_URL: http://localhost:8000
+      HITL_SMTP_HOST: mail
+      HITL_SMTP_PORT: "1025"
+    depends_on: {db: {condition: service_healthy}}
+  hitl:
+    build: .
+    environment: *env
+    ports: ["8000:8000"]
+    depends_on: {migrate: {condition: service_completed_successfully}}

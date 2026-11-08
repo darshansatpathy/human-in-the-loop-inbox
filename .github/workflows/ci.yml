@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint, types, tests on PostgreSQL ${{ matrix.pg }} (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {python: "3.11", pg: "16"}
+          - {python: "3.12", pg: "17"}
+          - {python: "3.13", pg: "17"}
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 30
+    env:
+      HITL_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - name: The shipped policy is valid
+        run: hitl check-policy --file policy.yaml
+      - name: Tests (workflow, races, grants, audit chain, Slack, email over SMTP, webhooks, API)
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=85
+
+  load:
+    name: Load test
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hitl
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: |
+          HITL_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/hitl python bench/load.py --flows 300 --concurrency 16 --out performance.md
+          cat performance.md >> "$GITHUB_STEP_SUMMARY"
+
+  image:
+    name: Container image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t human-in-the-loop-inbox:ci .
+      - name: Smoke test against PostgreSQL
+        run: |
+          docker network create hitl
+          docker run -d --name db --network hitl -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=hitl postgres:17
+          for i in $(seq 1 30); do docker exec db pg_isready -U postgres && break; sleep 1; done
+          sleep 2
+          E="-e HITL_DATABASE_URL=postgresql://postgres:pw@db:5432/hitl -e HITL_SIGNING_KEY=ci-signing-key-0123456789abcdef"
+          docker run --rm --network hitl $E human-in-the-loop-inbox:ci migrate
+          AGENT=$(docker run --rm --network hitl $E human-in-the-loop-inbox:ci add-agent bot)
+          docker run -d --name svc --network hitl -p 8000:8000 $E human-in-the-loop-inbox:ci
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8000/readyz && break; sleep 1; done
+          curl -sf -X POST http://127.0.0.1:8000/v1/requests -H "Authorization: Bearer $AGENT" -H 'content-type: application/json' \
+            -d '{"action":"read_invoice","args":{"id":"INV-1"},"risk":"low","summary":"look up an invoice"}' | grep -q '"status":"approved"'
+          test "$(docker exec svc id -u)" = 10001
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pip-audit
+      - run: pip-audit --skip-editable
