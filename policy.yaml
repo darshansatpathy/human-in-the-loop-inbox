@@ -1,0 +1,60 @@
+# Which agent actions need a human. First match wins; anything unmatched needs one approver from "default".
+rules:
+  - name: read-only
+    match: {action: "read_*"}
+    decision: auto_approve
+    reason: Reads change nothing.
+
+  - name: never-delete-production
+    match:
+      action: "delete_*"
+      args: {environment: {eq: production}}
+    decision: auto_deny
+    reason: Agents may not delete in production; do it by hand with a change ticket.
+
+  - name: small-refunds
+    match:
+      action: issue_refund
+      args: {amount: {lte: 50}}
+    decision: auto_approve
+    reason: Refunds up to 50 are within the agent's limit.
+
+  - name: large-refunds
+    match:
+      action: issue_refund
+      args: {amount: {gt: 1000}}
+    approvals: 2
+    approvers: [finance]
+    ttl_minutes: 240
+    escalate_after_minutes: 30
+    escalate_to: [finance-leads]
+    notify: ["slack:#refund-approvals", "email:finance"]
+    reason: Two people from finance for refunds above 1,000.
+
+  - name: refunds
+    match: {action: issue_refund}
+    approvers: [support-leads, finance]
+    ttl_minutes: 120
+    notify: ["slack:#refund-approvals"]
+
+  - name: outbound-email
+    match: {action: send_email, risk: [medium, high, critical]}
+    approvers: [support-leads]
+    ttl_minutes: 30
+    notify: ["slack:#agent-approvals"]
+
+  - name: critical
+    match: {risk: [critical]}
+    approvals: 2
+    approvers: [oncall]
+    ttl_minutes: 15
+    escalate_after_minutes: 5
+    escalate_to: [oncall-managers]
+    notify: ["slack:#incidents", "email:oncall"]
+    allow_edits: false
+
+default:
+  name: default
+  approvers: [default]
+  ttl_minutes: 60
+  notify: ["slack:#agent-approvals"]
