@@ -1,6 +1,6 @@
 """Load test of the full approval flow on PostgreSQL: submit, wait (long poll), approve, consume the grant.
 
-    HITL_DATABASE_URL=postgresql://... python bench/load.py --flows 400 --concurrency 16 --out docs/performance.md
+HITL_DATABASE_URL=postgresql://... python bench/load.py --flows 400 --concurrency 16 --out docs/performance.md
 """
 
 from __future__ import annotations
@@ -73,8 +73,13 @@ async def main(flows: int, concurrency: int, out: str | None) -> None:
 
         ok, n, _ = await verify_chain(cur)
     await db.close()
-    names = {"submit": "Submit (policy, insert, audit event)", "vote": "Approve (lock, vote, quorum, grant)", "wake": "Agent's long poll wakes after the vote",
-             "consume": "Executor consumes the grant", "flow": "Whole flow, excluding the 50 ms before the vote"}
+    names = {
+        "submit": "Submit (policy, insert, audit event)",
+        "vote": "Approve (lock, vote, quorum, grant)",
+        "wake": "Agent's long poll wakes after the vote",
+        "consume": "Executor consumes the grant",
+        "flow": "Whole flow, excluding the 50 ms before the vote",
+    }
     lines = [
         "# Performance",
         "",
@@ -88,7 +93,11 @@ async def main(flows: int, concurrency: int, out: str | None) -> None:
         "|---|---|---|---|",
     ]
     lines += [f"| {names[k]} | {pct(v, 0.5):.1f} | {pct(v, 0.95):.1f} | {pct(v, 0.99):.1f} |" for k, v in lat.items()]
-    lines += ["", "Every audit event takes a transaction-scoped advisory lock to extend the hash chain, so event appends are serialised; this is the throughput cost of a single tamper-evident chain."]
+    lines += [
+        "",
+        "Every audit event takes a transaction-scoped advisory lock to extend the hash chain, so event appends are serialised; "
+        "this is the throughput cost of a single tamper-evident chain.",
+    ]
     text = "\n".join(lines) + "\n"
     print(text)
     if out:
