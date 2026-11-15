@@ -8,6 +8,9 @@
 
 An approval inbox for agent actions. A policy decides which actions need a person; reviewers decide in Slack, by email or through the API; and **the agent can only execute exactly what was approved, once**.
 
+> Reference implementation built on synthetic or public data. It distils patterns from production
+> work into code you can run and read; it is not a client system.
+
 ```mermaid
 sequenceDiagram
   participant A as Agent
